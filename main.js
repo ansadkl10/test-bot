@@ -1,7 +1,4 @@
-// ✅ CORRECT IMPORT FOR BAILEYS v6.5.0
-import pkg from '@whiskeysockets/baileys';
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = pkg;
-
+import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
@@ -9,20 +6,18 @@ import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import moment from 'moment-timezone';
+import dotenv from 'dotenv';
 
+dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Config
-const config = {
-    botName: 'Nexa-Bot',
-    version: '3.0.0',
-    ownerName: 'ZenX',
-    ownerNumber: '919876543210',
-    prefix: '.',
-    sessionName: 'nexa-session',
-    timezone: 'Asia/Kolkata'
-};
+// Import config
+import config from './config.js';
+
+// ✅ Update config from env
+config.mode = process.env.MODE || config.mode;
+config.ownerNumber = process.env.OWNER_NUMBER || config.ownerNumber;
 
 const logger = pino({ level: 'silent' });
 const sessionDir = path.join(__dirname, 'sessions', config.sessionName);
@@ -80,14 +75,31 @@ async function loadPlugins() {
     return commands;
 }
 
+// ✅ Check if user is owner
 function isOwner(jid) {
-    return jid === config.ownerNumber + '@s.whatsapp.net';
+    const ownerJid = config.ownerNumber + '@s.whatsapp.net';
+    return jid === ownerJid;
+}
+
+// ✅ Check if bot is in private mode
+function isPrivateMode() {
+    return config.mode === 'private';
+}
+
+// ✅ Check if user can use bot
+function canUseBot(jid) {
+    if (isPrivateMode()) {
+        return isOwner(jid); // Only owner in private mode
+    }
+    return true; // Everyone in public mode
 }
 
 // Main function
 async function startBot() {
     console.log(`\n🚀 Starting ${config.botName} v${config.version}`);
     console.log(`👑 Owner: ${config.ownerName} (${config.ownerNumber})`);
+    console.log(`🔐 Mode: ${config.mode.toUpperCase()}`);
+    console.log(`📁 Session: ${config.sessionName}\n`);
     
     await fs.ensureDir(sessionDir);
     await fs.ensureDir(path.join(__dirname, 'database'));
@@ -96,12 +108,11 @@ async function startBot() {
     
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     
-    // ✅ WORKING SOCKET CREATION
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
         logger: logger,
-        browser: ['Nexa-Bot', 'Chrome', '120.0.0.0']
+        browser: [config.botName, 'Chrome', '120.0.0.0']
     });
 
     sock.ev.on('connection.update', (update) => {
@@ -114,6 +125,7 @@ async function startBot() {
         
         if (connection === 'open') {
             console.log(`✅ Connected as ${sock.user.id.split(':')[0]}`);
+            console.log(`🔐 Mode: ${config.mode.toUpperCase()}`);
         }
         
         if (connection === 'close') {
@@ -126,8 +138,21 @@ async function startBot() {
         const m = messages[0];
         if (!m.message || m.key.fromMe) return;
         
-        const messageText = m.message.conversation || '';
+        const messageText = m.message.conversation || 
+                           m.message.extendedTextMessage?.text || '';
         const sender = m.key.remoteJid;
+        
+        // ✅ Check if user can use bot
+        if (!canUseBot(sender)) {
+            // Send private mode message only once
+            if (messageText.startsWith(config.prefix)) {
+                await sock.sendMessage(sender, { 
+                    text: `🔐 *Bot is in PRIVATE mode*\nOnly owner can use this bot.\nOwner: @${config.ownerNumber}`,
+                    mentions: [`${config.ownerNumber}@s.whatsapp.net`]
+                });
+            }
+            return;
+        }
         
         if (!messageText.startsWith(config.prefix)) return;
         
@@ -143,7 +168,8 @@ async function startBot() {
                     database,
                     saveDatabase,
                     isOwner: isOwner(sender),
-                    config
+                    config,
+                    commands
                 });
             } catch (error) {
                 await sock.sendMessage(sender, { text: `❌ ${error.message}` });
@@ -154,5 +180,7 @@ async function startBot() {
     sock.ev.on('creds.update', saveCreds);
 }
 
+// Start
+startBot().catch(console.error);
 // Start
 startBot().catch(console.error);
